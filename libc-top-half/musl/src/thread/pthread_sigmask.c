@@ -30,6 +30,7 @@ int pthread_sigmask(int how, const sigset_t *restrict set, sigset_t *restrict ol
 
 	if (set && (unsigned)how - SIG_BLOCK > 2U) return EINVAL;
 
+	__sig_critical_enter();
 	if (old) {
 		__sigset_copy(old, &self->sigmask);
 		/* The libc-internal signals are not the application's business. */
@@ -65,9 +66,10 @@ int pthread_sigmask(int how, const sigset_t *restrict set, sigset_t *restrict ol
 
 		/* Unblocking has to deliver: signals only ever arrive at syscall
 		 * boundaries, so nothing else would pick these up. */
-		if (how != SIG_BLOCK) __sig_deliver_pending();
+		/* Outermost leave drains only after the whole mask is committed. */
 	}
 
+	__sig_critical_leave();
 	return 0;
 }
 #endif

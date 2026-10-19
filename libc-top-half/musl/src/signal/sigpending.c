@@ -18,7 +18,9 @@ int sigpending(sigset_t *set)
 	 * flushes the queue into it (blocked ones land in sigpending, deliverable
 	 * ones run their handlers) and makes the answer current. */
 	(void)__wasi_sched_yield();
+	__sig_critical_enter();
 	__sigset_copy(set, &__pthread_self()->sigpending);
+	__sig_critical_leave();
 	return 0;
 #endif
 }

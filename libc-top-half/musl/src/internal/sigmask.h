@@ -8,6 +8,17 @@
  * mask arithmetic is done over this many bytes. */
 #define __SIGSET_BYTES (_NSIG/8)
 
+#ifndef __wasilibc_unmodified_upstream
+/* Per guest thread, never a host/container-wide suppression flag. The loader
+ * polls only at function entries and loop headers: these straight-line TLS
+ * increments/decrements cannot themselves be split by an injected poll. */
+extern hidden __thread volatile unsigned __sig_critical_depth;
+#define __sig_critical_enter() (++__sig_critical_depth)
+#define __sig_critical_leave() do { \
+    if (!--__sig_critical_depth) __sig_deliver_pending(); \
+} while (0)
+#endif
+
 static inline void __sigset_or(sigset_t *dst, const void *bits)
 {
 	unsigned char *d = (unsigned char *)dst;

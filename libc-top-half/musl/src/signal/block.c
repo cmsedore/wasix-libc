@@ -41,9 +41,11 @@ void __block_all_sigs(void *set)
 #ifdef __wasilibc_unmodified_upstream
 	__syscall(SYS_rt_sigprocmask, SIG_BLOCK, &all_mask, set, _NSIG/8);
 #else
+	__sig_critical_enter();
 	pthread_t self = __pthread_self();
 	if (set) __sigset_copy((sigset_t *)set, &self->sigmask);
 	__sigset_or(&self->sigmask, all_mask);
+	__sig_critical_leave();
 #endif
 }
 
@@ -52,9 +54,11 @@ void __block_app_sigs(void *set)
 #ifdef __wasilibc_unmodified_upstream
 	__syscall(SYS_rt_sigprocmask, SIG_BLOCK, &app_mask, set, _NSIG/8);
 #else
+	__sig_critical_enter();
 	pthread_t self = __pthread_self();
 	if (set) __sigset_copy((sigset_t *)set, &self->sigmask);
 	__sigset_or(&self->sigmask, app_mask);
+	__sig_critical_leave();
 #endif
 }
 
@@ -63,10 +67,10 @@ void __restore_sigs(void *set)
 #ifdef __wasilibc_unmodified_upstream
 	__syscall(SYS_rt_sigprocmask, SIG_SETMASK, set, 0, _NSIG/8);
 #else
+	__sig_critical_enter();
 	pthread_t self = __pthread_self();
 	if (set) __sigset_copy(&self->sigmask, (const sigset_t *)set);
-	/* Restoring can unblock, and nothing else will come along to deliver:
-	 * WASIX only delivers signals at syscall boundaries. */
-	__sig_deliver_pending();
+	/* Restoring may unblock pending delivery, after the full copy. */
+	__sig_critical_leave();
 #endif
 }

@@ -13,6 +13,8 @@ static int unmask_done;
 static unsigned long handler_set[_NSIG/(8*sizeof(long))];
 #ifdef __wasilibc_unmodified_upstream
 #else
+__thread volatile unsigned __sig_critical_depth;
+static __thread volatile unsigned pending_generation;
 static volatile int __eintr_callback_registered = 0;
 static volatile struct k_sigaction __eintr_handler_callbacks[_NSIG];
 volatile int __eintr_handler_lock[1];
@@ -179,6 +181,8 @@ volatile int __eintr_valid_flag;
 
 #ifdef __wasilibc_unmodified_upstream
 #else
+/* Called with critical depth 1. Release deferral only around user code,
+ * after the registry lock is released and the complete handler mask is set. */
 /* Runs one delivery of `sig`, with the handler's mask installed for the
  * duration per POSIX: sa_mask, plus `sig` itself unless SA_NODEFER. */
 static void dispatch_signal(int sig) {
@@ -225,9 +229,13 @@ static void dispatch_signal(int sig) {
 			memset(&si, 0, sizeof si);
 			si.si_signo = sig;
 			si.si_code = SI_USER;
+			--__sig_critical_depth;
 			dispatch.with_info(sig, &si, NULL);
+			++__sig_critical_depth;
 		} else {
+			--__sig_critical_depth;
 			ksa.handler(sig);
+			++__sig_critical_depth;
 		}
 	} else {
 		/* The default actions are not interruptible. sigfillset() covers
@@ -243,8 +251,15 @@ static void dispatch_signal(int sig) {
 }
 
 void __sig_deliver_pending(void) {
+	/* Keep selection, removal, registry lookup and mask transitions atomic
+	 * with respect to reentrant host delivery, including ordinary syscalls. */
+	if (++__sig_critical_depth != 1) {
+		--__sig_critical_depth;
+		return;
+	}
 	pthread_t self = __pthread_self();
 	for (;;) {
+		unsigned generation = pending_generation;
 		int sig = 0;
 		for (int i = 1; i < _NSIG; i++) {
 			if (i-32U < 3) {
@@ -257,6 +272,10 @@ void __sig_deliver_pending(void) {
 			}
 		}
 		if (!sig) {
+			/* A reentrant callback may have queued a signal whose index
+			 * this scan already passed. Never strand it at the final leave. */
+			if (generation != pending_generation) continue;
+			--__sig_critical_depth;
 			return;
 		}
 		__sigset_del(&self->sigpending, sig);
@@ -282,21 +301,21 @@ void __wasm_signal(int sig) {
 		return;
 	}
 
+	/* Queue first, even when unmasked. A callback arriving inside a libc
+	 * transaction must never wait on its interrupted thread's own lock. */
+	__sig_critical_enter();
 	pthread_t self = __pthread_self();
-	if (__sigset_test(&self->sigmask, sig)) {
-		/* Blocked: hold it until something unblocks it. Standard signals do
-		 * not queue, so a repeat while blocked collapses into this one. */
-		__sigset_add(&self->sigpending, sig);
-		return;
-	}
-
-	dispatch_signal(sig);
-	__sig_deliver_pending();
+	__sigset_add(&self->sigpending, sig);
+	++pending_generation;
+	__sig_critical_leave();
 }
 #endif
 
 int __libc_sigaction(int sig, const struct sigaction *restrict sa, struct sigaction *restrict old)
 {
+#ifndef __wasilibc_unmodified_upstream
+	__sig_critical_enter();
+#endif
 	struct k_sigaction ksa, ksa_old;
 	if (sa) {
 		if ((uintptr_t)sa->sa_handler > 1UL) {
@@ -352,6 +371,9 @@ int __libc_sigaction(int sig, const struct sigaction *restrict sa, struct sigact
 		old->sa_flags = ksa_old.flags;
 		memcpy(&old->sa_mask, &ksa_old.mask, _NSIG/8);
 	}
+#ifndef __wasilibc_unmodified_upstream
+	__sig_critical_leave();
+#endif
 	return __syscall_ret(r);
 }
 
