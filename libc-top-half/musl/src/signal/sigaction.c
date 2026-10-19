@@ -25,6 +25,9 @@ extern int __claim_process_signal(unsigned long long blocked);
 __attribute__((import_module(SIGNAL_IMPORT_MODULE), import_name("verkosto_signal_delivered_v1")))
 extern void __record_signal_handler(int restart);
 
+__attribute__((import_module(SIGNAL_IMPORT_MODULE), import_name("verkosto_signal_terminate_v1")))
+extern void __signal_terminate(int sig);
+
 static volatile int __eintr_callback_registered = 0;
 static volatile struct k_sigaction __eintr_handler_callbacks[_NSIG];
 volatile int __eintr_handler_lock[1];
@@ -43,7 +46,9 @@ static void core_handler(int sig) {
 
 _Noreturn
 static void terminate_handler(int sig) {
-    // Termination is not SIGABRT. Preserve the original signal in shell status.
+    /* The kernel must distinguish signal death from an explicit _Exit(141),
+     * and stop every native worker before reporting the process as dead. */
+    if (sig == SIGPIPE) __signal_terminate(sig);
     _Exit(128 + sig);
 }
 
@@ -497,6 +502,8 @@ int __wasm_sigaction(int sig, int action) {
 }
 
 void __wasi_init_signals() {
+    /* Startup registers a callback even when no sigaction was requested. */
+    if (default_handler == NULL) default_handler = &__default_handler;
     __wasi_errno_t err;
 	int sigaction_ret;
 
