@@ -6,6 +6,12 @@
 #include <wasi/api.h>
 #include "pthread_impl.h"
 #include "sigmask.h"
+#if defined(__wasm64__)
+__attribute__((import_module("wasix_64v1"), import_name("verkosto_signal_pending_v1")))
+#else
+__attribute__((import_module("wasix_32v1"), import_name("verkosto_signal_pending_v1")))
+#endif
+extern unsigned long long __pending_process_signals(void);
 #endif
 
 int sigpending(sigset_t *set)
@@ -20,6 +26,8 @@ int sigpending(sigset_t *set)
 	(void)__wasi_sched_yield();
 	__sig_critical_enter();
 	__sigset_copy(set, &__pthread_self()->sigpending);
+	unsigned long long shared = __pending_process_signals();
+	__sigset_or(set, &shared);
 	__sig_critical_leave();
 	return 0;
 #endif

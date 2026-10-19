@@ -12,6 +12,8 @@
 #include <stdatomic.h>
 #include <wasi/api.h>
 #include <bits/signal.h>
+#include <signal.h>
+#include "sigmask.h"
 #endif
 
 #include <stdalign.h>
@@ -326,6 +328,8 @@ hidden void __wasi_thread_start_C(int tid, void *p)
 	// whichever thread (parent or child) reaches this point first can proceed
 	// without waiting.
 	atomic_store((atomic_int *) &(self->tid), tid);
+	/* TLS, thread id and the inherited mask are ready before registration. */
+	__sig_register_callback();
 	// Execute the user's start function.
 	__pthread_exit(args->start_func(args->start_arg));
 }
@@ -520,7 +524,9 @@ int __pthread_create(pthread_t *restrict res, const pthread_attr_t *restrict att
 	/* POSIX: a new thread inherits the creator's signal mask and starts with
 	 * nothing pending. Upstream gets this from clone(); the mask lives in the
 	 * thread structure here, so copy it across explicitly. */
+	__sig_critical_enter();
 	new->sigmask = self->sigmask;
+	__sig_critical_leave();
 	memset(&new->sigpending, 0, sizeof new->sigpending);
 #endif
 

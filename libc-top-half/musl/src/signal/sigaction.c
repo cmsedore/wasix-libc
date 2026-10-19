@@ -15,6 +15,16 @@ static unsigned long handler_set[_NSIG/(8*sizeof(long))];
 #else
 __thread volatile unsigned __sig_critical_depth;
 static __thread volatile unsigned pending_generation;
+#if defined(__wasm64__)
+#define SIGNAL_IMPORT_MODULE "wasix_64v1"
+#else
+#define SIGNAL_IMPORT_MODULE "wasix_32v1"
+#endif
+__attribute__((import_module(SIGNAL_IMPORT_MODULE), import_name("verkosto_signal_claim_v1")))
+extern int __claim_process_signal(unsigned long long blocked);
+__attribute__((import_module(SIGNAL_IMPORT_MODULE), import_name("verkosto_signal_delivered_v1")))
+extern void __record_signal_handler(int restart);
+
 static volatile int __eintr_callback_registered = 0;
 static volatile struct k_sigaction __eintr_handler_callbacks[_NSIG];
 volatile int __eintr_handler_lock[1];
@@ -208,6 +218,7 @@ static void dispatch_signal(int sig) {
 			__sigset_add(&self->sigmask, sig);
 		}
 
+		if (ksa.handler != SIG_IGN) __record_signal_handler(!!(ksa.flags & SA_RESTART));
 		if (ksa.flags & SA_SIGINFO) {
 			/* A handler installed through `sa_sigaction` takes three
 			 * arguments. On wasm the argument count is part of the
@@ -272,6 +283,13 @@ void __sig_deliver_pending(void) {
 			}
 		}
 		if (!sig) {
+			unsigned long long blocked = 0;
+			memcpy(&blocked, &self->sigmask, _NSIG/8);
+			sig = __claim_process_signal(blocked);
+			if (sig) {
+				dispatch_signal(sig);
+				continue;
+			}
 			/* A reentrant callback may have queued a signal whose index
 			 * this scan already passed. Never strand it at the final leave. */
 			if (generation != pending_generation) continue;
@@ -297,6 +315,11 @@ void __sig_register_callback(void) {
 
 __attribute__((export_name("__wasm_signal")))
 void __wasm_signal(int sig) {
+	/* Zero is a private notification, never a guest-visible signal. */
+	if (!sig) {
+		__sig_deliver_pending();
+		return;
+	}
 	if (sig-32U < 3 || sig-1U >= _NSIG-1) {
 		return;
 	}
