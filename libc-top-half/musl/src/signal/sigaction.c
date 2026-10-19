@@ -31,8 +31,8 @@ static void core_handler(int sig) {
 
 _Noreturn
 static void terminate_handler(int sig) {
-    fprintf(stderr, "Program recieved termination signal: %s\n", strsignal(sig));
-    abort();
+    // Termination is not SIGABRT. Preserve the original signal in shell status.
+    _Exit(128 + sig);
 }
 
 _Noreturn
